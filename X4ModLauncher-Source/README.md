@@ -2,8 +2,6 @@
 
 [Download the latest packaged release](https://github.com/Alakeram/x4-mod-launcher/releases/latest) · [Download the organized ZIP directly](https://github.com/Alakeram/x4-mod-launcher/releases/download/v1.0.0/X4ModLauncher-Nexus-Organized.zip)
 
-The unpacked distribution files are also available under [`distribution\`](distribution).
-
 Windows WPF desktop launcher for selecting installed, non-DLC X4: Foundations extensions and safely applying their enabled state to one configurable `content.xml` profile.
 
 ## Current status
