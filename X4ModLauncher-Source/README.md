@@ -23,12 +23,6 @@ Implemented:
 - packaged X4 icon for the launcher executable and window/taskbar identity;
 - offline fixture tests for toggling, XML preservation, duplicates, unavailable folders, Steam sync, and rollback/restore;
 
-Not yet claimed:
-
-- no automated in-game loaded-extension verification exists yet;
-- no installer or signed release artifact is checked in;
-- no live profile or X4 save was changed during development.
-
 ## Build and test
 
 Prerequisites: Windows, .NET 8 SDK, and the Windows Desktop runtime/SDK available to the SDK installation.
