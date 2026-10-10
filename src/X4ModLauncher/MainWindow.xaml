@@ -56,6 +56,7 @@
           <RowDefinition Height="Auto" />
           <RowDefinition Height="Auto" />
           <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
         <TextBlock Grid.Row="0" Grid.Column="0" Text="X4 install" VerticalAlignment="Center" />
         <TextBox Grid.Row="0" Grid.Column="1" x:Name="X4RootBox" ToolTip="Folder containing X4.exe" />
@@ -66,17 +67,21 @@
         <TextBlock Grid.Row="2" Grid.Column="0" Text="Backup folder" VerticalAlignment="Center" />
         <TextBox Grid.Row="2" Grid.Column="1" x:Name="BackupDirectoryBox" ToolTip="Backups are timestamped and never overwrite an existing backup" />
         <Button Grid.Row="2" Grid.Column="2" Content="Browse" Click="BrowseBackup_Click" />
+        <TextBlock Grid.Row="3" Grid.Column="0" Text="Keep newest backups" VerticalAlignment="Center" />
+        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal">
+          <TextBox x:Name="BackupRetentionBox" Width="70" ToolTip="Older launcher backups beyond this count are deleted after each Apply. 0 keeps every backup." />
+          <TextBlock Text="0 = keep all. Only launcher backups in the backup folder are removed." Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="10,0,0,0" />
+        </StackPanel>
       </Grid>
     </Border>
 
     <Border Grid.Row="2" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="10" Margin="0,0,0,12">
       <DockPanel LastChildFill="False">
         <TextBlock Text="Mod Profiles" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,12,0" />
-        <ComboBox x:Name="ProfileSelector" ItemsSource="{Binding ProfileNames}" SelectionChanged="ProfileSelector_SelectionChanged" DropDownOpened="ProfileSelector_DropDownOpened" DropDownClosed="ProfileSelector_DropDownClosed" Width="220" Height="30" VerticalContentAlignment="Center" ToolTip="Choose a saved mod profile or create a new one" />
-        <Button Content="Save Current" Click="SaveProfile_Click" Width="105" HorizontalContentAlignment="Center" />
-        <Button Content="Load" Click="LoadProfile_Click" Width="105" HorizontalContentAlignment="Center" />
-        <Button Content="Load &amp; Launch" Click="LoadLaunchProfile_Click" Width="125" HorizontalContentAlignment="Center" />
+        <ComboBox x:Name="ProfileSelector" SelectionChanged="ProfileSelector_SelectionChanged" DropDownOpened="ProfileSelector_DropDownOpened" DropDownClosed="ProfileSelector_DropDownClosed" Width="220" Height="30" VerticalContentAlignment="Center" ToolTip="Choose a saved mod profile or create a new one" />
+        <Button Content="Save" Click="SaveProfile_Click" Width="105" HorizontalContentAlignment="Center" ToolTip="Save the current toggles into the selected profile" />
         <Button Content="Delete" Click="DeleteProfile_Click" Width="105" HorizontalContentAlignment="Center" />
+        <TextBlock x:Name="ProfileStateText" Foreground="{StaticResource WarningBrush}" VerticalAlignment="Center" Margin="14,0,0,0" TextWrapping="Wrap" MaxWidth="360" />
       </DockPanel>
     </Border>
 
@@ -87,9 +92,9 @@
         <Button Content="Remove deprecated entries" Click="RemoveDeprecated_Click" ToolTip="Remove stale profile records for extensions whose folders are no longer installed" />
       </StackPanel>
       <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
-        <Button Content="Apply" Click="Apply_Click" />
-        <Button Content="Apply &amp; Launch" Click="ApplyLaunch_Click" />
-        <Button Content="Launch Game" Click="LaunchGame_Click" />
+        <Button Content="Apply" Click="Apply_Click" ToolTip="Write the toggles shown below to the X4 profile" />
+        <Button Content="Apply &amp; Launch" Click="ApplyLaunch_Click" ToolTip="Write the toggles shown below, then start X4" />
+        <Button Content="Launch Game" Click="LaunchGame_Click" ToolTip="Start X4 with its current mod setup" />
       </StackPanel>
     </DockPanel>
 
@@ -100,7 +105,7 @@
           <RowDefinition Height="Auto" />
           <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <TextBlock Grid.Row="0" x:Name="CatalogHint" Text="Installed extensions are listed here. Unchecked items are installed but disabled in the selected profile; DLC is read-only." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="8,2,8,8" />
+        <TextBlock Grid.Row="0" x:Name="CatalogHint" Text="Pick a profile to preview it here, or toggle mods directly. Nothing is written to X4 until you press Apply. DLC is read-only." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="8,2,8,8" />
         <Grid Grid.Row="1" Margin="8,2,8,6">
           <Grid.ColumnDefinitions>
           <ColumnDefinition Width="76" />

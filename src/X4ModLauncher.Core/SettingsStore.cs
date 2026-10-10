@@ -18,20 +18,29 @@ public sealed class SettingsStore
     {
         if (!File.Exists(_settingsPath))
             return new X4LauncherSettings();
+        X4LauncherSettings settings;
         try
         {
-            var settings = JsonSerializer.Deserialize<X4LauncherSettings>(
+            settings = JsonSerializer.Deserialize<X4LauncherSettings>(
                 File.ReadAllText(_settingsPath),
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new X4LauncherSettings();
-            settings.ModProfiles ??= new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-            if (settings.ModProfiles.Comparer != StringComparer.OrdinalIgnoreCase)
-                settings.ModProfiles = new Dictionary<string, List<string>>(settings.ModProfiles, StringComparer.OrdinalIgnoreCase);
-            return settings;
         }
         catch (JsonException)
         {
+            // Keep the unreadable file so saved profiles can be recovered by hand instead of being overwritten.
+            try { File.Copy(_settingsPath, $"{_settingsPath}.corrupt-{DateTime.Now:yyyyMMdd-HHmmss}", overwrite: false); }
+            catch (IOException) { /* A copy from the same second already exists. */ }
             return new X4LauncherSettings();
         }
+
+        settings.Profiles ??= new List<ModProfile>();
+        settings.Profiles.RemoveAll(profile => profile is null || string.IsNullOrWhiteSpace(profile.Name));
+        foreach (var profile in settings.Profiles)
+            profile.Enabled ??= new List<string>();
+        if (settings.BackupRetention < 0)
+            settings.BackupRetention = X4LauncherSettings.DefaultBackupRetention;
+        MigrateV1Profiles(settings);
+        return settings;
     }
 
     public void Save(X4LauncherSettings settings)
@@ -39,7 +48,34 @@ public sealed class SettingsStore
         var directory = Path.GetDirectoryName(_settingsPath) ?? throw new InvalidOperationException("Settings path has no directory.");
         Directory.CreateDirectory(directory);
         var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(_settingsPath, json);
+        // Write to a temp file and swap it in so a crash mid-write cannot leave a truncated settings file.
+        var tempPath = _settingsPath + ".tmp";
+        File.WriteAllText(tempPath, json);
+        File.Move(tempPath, _settingsPath, overwrite: true);
+    }
+
+    // v1.0 stored profiles as name -> enabled IDs and shared them across every X4 profile. They become
+    // legacy profiles (Disabled = null) scoped to the X4 profile that was configured when they were made.
+    private static void MigrateV1Profiles(X4LauncherSettings settings)
+    {
+        if (settings.ModProfiles is null)
+            return;
+        var folder = ModProfileLogic.FolderKey(settings.ProfilePath);
+        foreach (var (name, enabled) in settings.ModProfiles)
+        {
+            if (string.IsNullOrWhiteSpace(name)
+                || name.Equals(ModProfileLogic.NativeProfileName, StringComparison.OrdinalIgnoreCase)
+                || settings.Profiles.Any(profile => profile.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            settings.Profiles.Add(new ModProfile
+            {
+                Name = name,
+                X4ProfileFolder = folder,
+                Enabled = enabled ?? new List<string>(),
+                Disabled = null
+            });
+        }
+        settings.ModProfiles = null;
     }
 
     public static X4LauncherSettings WithDiscoveredDefaults(X4LauncherSettings settings)
@@ -136,14 +172,14 @@ public sealed class SettingsStore
         }
     }
 
-    private static IEnumerable<string> ReadSteamLibraryPaths(string libraryFoldersPath)
+    public static IEnumerable<string> ReadSteamLibraryPaths(string libraryFoldersPath)
     {
         string text;
         try
         {
             text = File.ReadAllText(libraryFoldersPath);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             yield break;
         }

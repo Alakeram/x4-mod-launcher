@@ -11,13 +11,20 @@ Windows WPF desktop launcher for X4: Foundations. Create named mod profiles, swi
 - discovery of extension folders and their `content.xml` metadata (name, version, dependencies);
 - one toggle per discovered non-DLC extension, with current vs desired state;
 - DLC visibility as read-only and unchanged by default;
-- named Mod Profiles that save and load desired extension selections, plus a built-in `Native` profile (all mods off);
-- Deprecated / Old Extension detection with confirmed stale-profile-entry cleanup;
-- selectable timestamped backups named `<ProfileName>-Backup-MM-DD-YYYY_HH-mm-ss.xml`;
+- named Mod Profiles per X4 profile folder, plus a built-in `Native` profile (all mods off); choosing a profile previews it, and Apply writes it;
+- mods that a profile does not mention (for example newly installed ones) are left as they are and flagged, never switched off silently;
+- Deprecated / Old Extension detection with confirmed stale-profile-entry cleanup; installed mods with unreadable metadata are shown read-only instead;
+- selectable timestamped backups named `<ProfileName>-Backup-MM-DD-YYYY_HH-mm-ss.xml`, keeping the newest 20 by default (configurable, 0 keeps all);
 - dependency warnings from extension metadata;
 - duplicate-ID detection, unavailable-folder warnings, atomic replacement, post-write verification, and restore;
 - explicit `enabled` plus `sync` handling for Native Hotkey API (`ws_3750545906`), so Steam Workshop sync cannot re-enable it in an unmodded profile;
-- Apply, Apply & Launch, Load & Launch, and direct Launch Game actions, with launch blocked when Apply or verification fails.
+- Apply, Apply & Launch, and Launch Game actions, with launch blocked when Apply or verification fails; Steam installs are launched through Steam.
+
+## Using it
+
+1. Pick a profile in **Mod Profiles** to preview it in the list, or toggle mods directly. Nothing is written yet.
+2. Press **Apply** (or **Apply & Launch**) to write the list to X4. A backup is made first.
+3. To keep a setup, choose **Create Profile** to name a new one, or press **Save** to update the selected profile.
 
 Known limitations:
 

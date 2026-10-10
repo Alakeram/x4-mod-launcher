@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System.Xml;
 
 namespace X4ModLauncher.Core;
@@ -33,10 +34,28 @@ public static class ExtensionCatalog
                         Dependencies = metadata.Dependencies
                     };
                 }
-                catch (XmlException)
+                catch (Exception ex) when (ex is XmlException or IOException or UnauthorizedAccessException)
                 {
-                    // A malformed extension is not safe to toggle. It remains discoverable as an unavailable item below
-                    // only if it is already present in the profile; otherwise it is omitted from the catalog.
+                    // The folder is installed but its metadata is unreadable. Keep it in the catalog as installed and
+                    // read-only so its profile entry is neither toggled nor offered for deprecated-entry cleanup.
+                    var folderName = Path.GetFileName(folder);
+                    var id = TryReadIdLeniently(metadataPath) ?? folderName;
+                    profile.Extensions.TryGetValue(id, out var existing);
+                    results[id] = new ExtensionEntry
+                    {
+                        Id = id,
+                        Name = id,
+                        Version = "Unknown",
+                        FolderName = folderName,
+                        FolderPath = folder,
+                        IsDlc = IsDlcIdentifier(id) || IsDlcIdentifier(folderName),
+                        IsAvailable = true,
+                        CurrentIsPresent = existing is not null,
+                        CurrentEnabled = existing?.Enabled ?? false,
+                        CurrentSync = existing?.Sync,
+                        Dependencies = Array.Empty<ExtensionDependency>(),
+                        MetadataError = ex.Message
+                    };
                 }
             }
         }
@@ -88,6 +107,20 @@ public static class ExtensionCatalog
             .Where(x => !string.IsNullOrWhiteSpace(x.Id))
             .ToList();
         return (id, name, version, IsDlcIdentifier(id) || IsDlcIdentifier(folderName) || type.Equals("dlc", StringComparison.OrdinalIgnoreCase), dependencies);
+    }
+
+    // Best-effort read of <content id="..."> from metadata that is not well-formed XML.
+    private static string? TryReadIdLeniently(string path)
+    {
+        try
+        {
+            var match = Regex.Match(File.ReadAllText(path), "<content\\b[^>]*?\\sid\\s*=\\s*[\"'](?<id>[^\"']+)[\"']", RegexOptions.IgnoreCase);
+            return match.Success && !string.IsNullOrWhiteSpace(match.Groups["id"].Value) ? match.Groups["id"].Value : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     public static bool IsDlcIdentifier(string value) => value.StartsWith("ego_dlc_", StringComparison.OrdinalIgnoreCase)

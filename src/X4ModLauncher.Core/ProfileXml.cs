@@ -54,6 +54,8 @@ public sealed class X4ProfileService
                 throw new InvalidOperationException($"Extension '{extension.Name}' is selected but its folder is unavailable.");
             if (extension.IsDlc)
                 throw new InvalidOperationException($"DLC extension '{extension.Name}' is read-only in this launcher.");
+            if (extension.MetadataError is not null)
+                throw new InvalidOperationException($"Extension '{extension.Name}' has unreadable metadata and is left unchanged: {extension.MetadataError}");
         }
 
         var changes = new List<ApplyChange>();

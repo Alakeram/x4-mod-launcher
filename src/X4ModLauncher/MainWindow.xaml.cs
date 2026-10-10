@@ -16,10 +16,12 @@ using WpfOpenFileDialog = Microsoft.Win32.OpenFileDialog;
 
 namespace X4ModLauncher;
 
+// Flow: choosing a profile previews it in the toggles (nothing is written); Apply / Apply & Launch write the
+// toggles to the X4 profile content.xml; Save stores the toggles in the selected profile.
 public partial class MainWindow : Window, INotifyPropertyChanged
 {
     private const string CreateProfileOption = "Create Profile";
-    private const string NativeProfileOption = "Native";
+    private const string NativeProfileOption = ModProfileLogic.NativeProfileName;
     private readonly X4ProfileService _profileService = new();
     private readonly X4LauncherService _launcherService = new();
     private readonly SettingsStore _settingsStore = new();
@@ -40,14 +42,34 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     public MainWindow()
     {
         InitializeComponent();
-        ExtensionList.MaxHeight = Math.Min(420, Math.Max(260, SystemParameters.WorkArea.Height - 470));
+        ExtensionList.MaxHeight = Math.Min(420, Math.Max(260, SystemParameters.WorkArea.Height - 510));
+        // Set directly rather than through a XAML binding: a binding attaches during the first layout pass and
+        // re-applies the selection, which raised a selection change that previewed and saved a profile on startup.
+        ProfileSelector.ItemsSource = ProfileNames;
         DataContext = this;
         Loaded += (_, _) =>
         {
             RefreshCatalog(loadSavedSettings: true);
-            _profileInteractionReady = true;
+            // Only react to profile selection once startup layout has settled, so nothing is written until the user acts.
+            Dispatcher.BeginInvoke(new Action(() => _profileInteractionReady = true), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         };
     }
+
+    private string? FolderKey => ModProfileLogic.FolderKey(_settings.ProfilePath);
+
+    private IReadOnlyList<ExtensionEntry> Catalog => Rows.Select(row => row.Entry).ToList();
+
+    private string? SelectedProfileName => ProfileSelector.SelectedItem is string name && !name.Equals(CreateProfileOption, StringComparison.Ordinal)
+        ? name
+        : null;
+
+    private ModProfile? SelectedProfile => SelectedProfileName is { } name ? ModProfileLogic.Find(_settings.Profiles, FolderKey, name) : null;
+
+    private Dictionary<string, bool> CurrentToggles() => Rows
+        .Where(row => row.CanEdit)
+        .ToDictionary(row => row.Id, row => row.DesiredEnabled, StringComparer.OrdinalIgnoreCase);
+
+    private bool HasUnappliedChanges() => ModProfileLogic.ChangesToApply(Catalog, CurrentToggles()).Count > 0;
 
     private void Refresh_Click(object sender, RoutedEventArgs e) => RefreshCatalog();
 
@@ -79,23 +101,86 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 
     private void ExtensionToggle_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement { DataContext: ExtensionRow row } && row.UseEnabled)
+        if (sender is FrameworkElement { DataContext: ExtensionRow row })
+            ToggleRow(row);
+    }
+
+    private void ExtensionRow_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is DependencyObject source
+            && (FindParent<WpfCheckBox>(source) is not null || FindParent<WpfButton>(source) is not null))
+            return;
+        if (sender is FrameworkElement { DataContext: ExtensionRow row })
+            ToggleRow(row);
+    }
+
+    private void ToggleRow(ExtensionRow row)
+    {
+        if (!row.UseEnabled)
+            return;
+        row.DesiredEnabled = !row.DesiredEnabled;
+        UpdateDependencyWarnings();
+        UpdateProfileState();
+    }
+
+    // ----- Mod profiles -----
+
+    private void ProfileSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_profileInteractionReady || _suppressProfileSelection || ProfileSelector.SelectedItem is not string name)
+            return;
+        if (name.Equals(CreateProfileOption, StringComparison.Ordinal))
         {
-            row.DesiredEnabled = !row.DesiredEnabled;
-            UpdateDependencyWarnings();
+            // The name dialog opens when the drop-down closes; the current toggles become the new profile.
+            SetNativeProfileLock(false);
+            return;
         }
+        PreviewProfile(name);
+    }
+
+    private void PreviewProfile(string name)
+    {        var profile = ModProfileLogic.Find(_settings.Profiles, FolderKey, name);
+        if (profile is null)
+        {
+            UpdateProfileState();
+            return;
+        }
+
+        var preview = ModProfileLogic.Preview(profile, Catalog);
+        var unlisted = preview.UnlistedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in Rows)
+        {
+            if (preview.DesiredStates.TryGetValue(row.Id, out var desired))
+                row.DesiredEnabled = desired;
+            row.IsUnlisted = unlisted.Contains(row.Id);
+        }
+        var isNative = ReferenceEquals(profile, ModProfileLogic.Native);
+        SetNativeProfileLock(isNative);
+        _lastProfileSelection = profile.Name;
+        _settings.SelectedProfileName = profile.Name;
+        _settingsStore.Save(_settings);
+        UpdateDependencyWarnings();
+        UpdateProfileState();
+
+        var on = preview.DesiredStates.Count(pair => pair.Value);
+        var off = preview.DesiredStates.Count - on;
+        var status = isNative
+            ? "Previewing 'Native': every mod off; DLC and the base game are unchanged. Nothing is written to X4 until you press Apply."
+            : $"Previewing '{profile.Name}': {on} on, {off} off. Nothing is written to X4 until you press Apply.";
+        if (unlisted.Count > 0)
+            status += $"\n{unlisted.Count} installed mod(s) are not in this profile and were left as they are; press Save to include them.";
+        StatusText.Text = status;
     }
 
     private void SaveProfile_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            EnsureProfileStorage();
-            var name = ProfileSelector.SelectedItem as string;
-            if (string.IsNullOrWhiteSpace(name)
-                || name.Equals(CreateProfileOption, StringComparison.Ordinal)
-                || name.Equals(NativeProfileOption, StringComparison.Ordinal))
+            var name = SelectedProfileName;
+            if (name is null)
                 throw new InvalidOperationException("Choose Create Profile to name a new profile, or select an existing profile first.");
+            if (name.Equals(NativeProfileOption, StringComparison.Ordinal))
+                throw new InvalidOperationException("Native is built in and cannot be overwritten. Choose Create Profile to save these toggles under a new name.");
             SaveCurrentProfile(name);
         }
         catch (Exception ex)
@@ -105,93 +190,33 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void LoadProfile_Click(object sender, RoutedEventArgs e) => LoadSelectedProfile(launch: false);
-
-    private void LoadLaunchProfile_Click(object sender, RoutedEventArgs e) => LoadSelectedProfile(launch: true);
-
-    private void LoadSelectedProfile(bool launch)
-    {
-        try
-        {
-            EnsureProfileStorage();
-            var name = ProfileSelector.SelectedItem as string;
-            if (string.IsNullOrWhiteSpace(name) || name.Equals(CreateProfileOption, StringComparison.Ordinal))
-                throw new InvalidOperationException("Choose a saved mod profile first.");
-            if (name.Equals(NativeProfileOption, StringComparison.Ordinal))
-            {
-                foreach (var row in Rows.Where(row => row.CanEdit))
-                    row.DesiredEnabled = false;
-            }
-            else
-            {
-                if (!_settings.ModProfiles.TryGetValue(name, out var enabledIds))
-                    throw new InvalidOperationException("Choose a saved mod profile first.");
-                var enabled = enabledIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-                foreach (var row in Rows.Where(row => row.CanEdit))
-                    row.DesiredEnabled = enabled.Contains(row.Id);
-            }
-            _settings.SelectedProfileName = name;
-            _lastProfileSelection = name;
-            _settingsStore.Save(_settings);
-            UpdateDependencyWarnings();
-            var result = ApplyDesiredState();
-            StatusText.Text = name.Equals(NativeProfileOption, StringComparison.Ordinal)
-                ? $"Loaded and applied built-in profile 'Native'. All editable mods are disabled; DLC and main game content remain unchanged. Backup: {Path.GetFileName(result.BackupPath)}"
-                : $"Loaded and applied mod profile '{name}'. Backup: {Path.GetFileName(result.BackupPath)}";
-            RefreshCatalog();
-            if (launch)
-            {
-                _launcherService.Launch(_settings.X4Root!);
-                Close();
-            }
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = $"Profile load failed: {ex.Message}";
-            WpfMessageBox.Show(this, ex.Message, "X4 Mod Launcher — Mod Profiles", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-    }
-
     private void DeleteProfile_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            EnsureProfileStorage();
-            var name = ProfileSelector.SelectedItem as string;
+            var name = SelectedProfileName;
             if (name?.Equals(NativeProfileOption, StringComparison.Ordinal) == true)
                 throw new InvalidOperationException("Native is a built-in profile and cannot be deleted.");
-            if (string.IsNullOrWhiteSpace(name) || !_settings.ModProfiles.ContainsKey(name))
+            var profile = SelectedProfile;
+            if (name is null || profile is null)
                 throw new InvalidOperationException("Choose a saved mod profile first.");
-            var answer = WpfMessageBox.Show(this, $"Delete the saved mod profile '{name}'? This does not change the current X4 profile.", "X4 Mod Launcher — Delete Profile", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            var answer = WpfMessageBox.Show(this, $"Delete the saved mod profile '{profile.Name}'? This does not change the current X4 profile.", "X4 Mod Launcher — Delete Profile", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (answer != MessageBoxResult.Yes)
                 return;
-            _settings.ModProfiles.Remove(name);
+            _settings.Profiles.Remove(profile);
             _settings.SelectedProfileName = null;
             _settingsStore.Save(_settings);
-            RefreshProfileList(defaultToNative: true);
-            StatusText.Text = $"Deleted mod profile '{name}'. The X4 profile was not changed.";
+            RefreshProfileList();
+            SelectProfileForCurrentState();
+            UpdateDependencyWarnings();
+            UpdateProfileState();
+            StatusText.Text = $"Deleted mod profile '{profile.Name}'. The X4 profile was not changed.";
         }
         catch (Exception ex)
         {
             StatusText.Text = $"Profile delete failed: {ex.Message}";
             WpfMessageBox.Show(this, ex.Message, "X4 Mod Launcher — Mod Profiles", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-    }
-
-    private void ProfileSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (!_profileInteractionReady || _suppressProfileSelection || ProfileSelector.SelectedItem is not string name)
-            return;
-        if (name.Equals(CreateProfileOption, StringComparison.Ordinal))
-        {
-            SetNativeProfileLock(false);
-            return;
-        }
-
-        SetNativeProfileLock(name.Equals(NativeProfileOption, StringComparison.Ordinal));
-        _lastProfileSelection = name;
-        _settings.SelectedProfileName = name;
-        _settingsStore.Save(_settings);
     }
 
     private void ProfileSelector_DropDownOpened(object sender, EventArgs e)
@@ -228,21 +253,34 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         try
         {
             var dialog = new ProfileNameDialog(this);
-            if (dialog.ShowDialog() == true)
+            if (dialog.ShowDialog() != true)
             {
-                try
-                {
-                    SaveCurrentProfile(dialog.ProfileName);
-                }
-                catch (Exception ex)
-                {
-                    StatusText.Text = $"Profile save failed: {ex.Message}";
-                    WpfMessageBox.Show(this, ex.Message, "X4 Mod Launcher — Mod Profiles", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    RestoreProfileSelection();
-                }
+                RestoreProfileSelection();
+                return;
             }
-            else
+            try
             {
+                var existing = ModProfileLogic.InScope(_settings.Profiles, FolderKey)
+                    .FirstOrDefault(profile => profile.Name.Equals(dialog.ProfileName, StringComparison.OrdinalIgnoreCase));
+                if (existing is not null)
+                {
+                    var overwrite = new ThemedDialog(this,
+                        "Create Mod Profile",
+                        $"A mod profile named '{existing.Name}' already exists. Overwrite it with the current toggles?",
+                        "Overwrite",
+                        "Cancel");
+                    if (overwrite.ShowDialog() != true)
+                    {
+                        RestoreProfileSelection();
+                        return;
+                    }
+                }
+                SaveCurrentProfile(dialog.ProfileName);
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"Profile save failed: {ex.Message}";
+                WpfMessageBox.Show(this, ex.Message, "X4 Mod Launcher — Mod Profiles", MessageBoxButton.OK, MessageBoxImage.Warning);
                 RestoreProfileSelection();
             }
         }
@@ -255,45 +293,241 @@ public partial class MainWindow : Window, INotifyPropertyChanged
     private void SaveCurrentProfile(string profileName)
     {
         ReadSettingsFromControls();
-        EnsureProfileStorage();
         var name = profileName.Trim();
         if (string.IsNullOrWhiteSpace(name)
             || name.Equals(CreateProfileOption, StringComparison.OrdinalIgnoreCase)
             || name.Equals(NativeProfileOption, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Enter a different name for this mod profile.");
+        if (Rows.Count == 0)
+            throw new InvalidOperationException("No extensions are loaded. Check the X4 install and profile paths, then press Refresh.");
 
-        var existingKey = _settings.ModProfiles.Keys.FirstOrDefault(key => key.Equals(name, StringComparison.OrdinalIgnoreCase));
-        if (existingKey is not null && !existingKey.Equals(name, StringComparison.Ordinal))
-            _settings.ModProfiles.Remove(existingKey);
-        _settings.ModProfiles[name] = Rows
-            .Where(row => row.CanEdit && row.DesiredEnabled)
-            .Select(row => row.Id)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        var folder = FolderKey;
+        var profile = ModProfileLogic.InScope(_settings.Profiles, folder)
+            .FirstOrDefault(existing => existing.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (profile is null)
+        {
+            profile = new ModProfile { Name = name, X4ProfileFolder = folder };
+            _settings.Profiles.Add(profile);
+        }
+        profile.Name = name;
+        var toggles = CurrentToggles();
+        ModProfileLogic.Capture(profile, toggles);
+        foreach (var row in Rows)
+            row.IsUnlisted = false;
+
         _settings.SelectedProfileName = name;
         _lastProfileSelection = name;
         _settingsStore.Save(_settings);
         RefreshProfileList();
         SelectProfileWithoutDialog(name);
-        StatusText.Text = $"Saved mod profile '{name}' with {_settings.ModProfiles[name].Count} enabled extensions. Press Apply to use it in X4.";
+        SetNativeProfileLock(false);
+        UpdateDependencyWarnings();
+        UpdateProfileState();
+        var on = toggles.Count(pair => pair.Value);
+        StatusText.Text = $"Saved mod profile '{name}' ({on} on, {toggles.Count - on} off). "
+            + (HasUnappliedChanges() ? "Press Apply to write it to X4." : "X4 already matches it.");
     }
 
     private void RestoreProfileSelection()
     {
-        SelectProfileWithoutDialog(string.IsNullOrWhiteSpace(_lastProfileSelection) ? CreateProfileOption : _lastProfileSelection);
+        SelectProfileWithoutDialog(_lastProfileSelection);
+        SetNativeProfileLock(SelectedProfileName?.Equals(NativeProfileOption, StringComparison.Ordinal) == true);
+        UpdateProfileState();
     }
 
-    private void SelectProfileWithoutDialog(string name)
+    private void SelectProfileWithoutDialog(string? name)
     {
         _suppressProfileSelection = true;
         try
         {
-            ProfileSelector.SelectedItem = ProfileNames.Contains(name) ? name : CreateProfileOption;
+            ProfileSelector.SelectedItem = name is not null && ProfileNames.Contains(name) ? name : null;
         }
         finally
         {
             _suppressProfileSelection = false;
+        }
+    }
+
+    private void RefreshProfileList()
+    {
+        _suppressProfileSelection = true;
+        try
+        {
+            ProfileNames.Clear();
+            ProfileNames.Add(NativeProfileOption);
+            foreach (var name in ModProfileLogic.InScope(_settings.Profiles, FolderKey)
+                         .Select(profile => profile.Name)
+                         .Where(name => !name.Equals(CreateProfileOption, StringComparison.OrdinalIgnoreCase)
+                             && !name.Equals(NativeProfileOption, StringComparison.OrdinalIgnoreCase))
+                         .Distinct(StringComparer.OrdinalIgnoreCase)
+                         .OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+                ProfileNames.Add(name);
+            ProfileNames.Add(CreateProfileOption);
+        }
+        finally
+        {
+            _suppressProfileSelection = false;
+        }
+    }
+
+    /// <summary>
+    /// After the toggles are reloaded from X4, select the profile that matches them (the last used one first).
+    /// If none matches, keep the last used profile selected so it shows as modified; never fall back to Native,
+    /// because Native locks the toggles and would hide that they are not all off.
+    /// </summary>
+    private void SelectProfileForCurrentState()
+    {
+        var catalog = Catalog;
+        var toggles = CurrentToggles();
+        var folder = FolderKey;
+        var preferred = _settings.SelectedProfileName is { } saved ? ModProfileLogic.Find(_settings.Profiles, folder, saved) : null;
+        var candidates = new[] { preferred, ModProfileLogic.Native }
+            .Concat(ModProfileLogic.InScope(_settings.Profiles, folder).OrderBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase))
+            .OfType<ModProfile>();
+        var pick = candidates.FirstOrDefault(profile => ModProfileLogic.Matches(profile, catalog, toggles))
+            ?? (preferred is not null && !ReferenceEquals(preferred, ModProfileLogic.Native) ? preferred : null);
+
+        SelectProfileWithoutDialog(pick?.Name);
+        if (pick is not null)
+            _lastProfileSelection = pick.Name;
+        SetNativeProfileLock(ReferenceEquals(pick, ModProfileLogic.Native));
+        var unlisted = pick is null
+            ? new HashSet<string>()
+            : ModProfileLogic.Preview(pick, catalog).UnlistedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in Rows)
+            row.IsUnlisted = unlisted.Contains(row.Id);
+    }
+
+    private void UpdateProfileState()
+    {
+        var parts = new List<string>();
+        if (Rows.Count > 0)
+        {
+            var profile = SelectedProfile;
+            if (profile is not null
+                && !ReferenceEquals(profile, ModProfileLogic.Native)
+                && !ModProfileLogic.Matches(profile, Catalog, CurrentToggles()))
+                parts.Add("Modified — press Save to keep");
+            else if (ProfileSelector.SelectedItem is null)
+                parts.Add("No saved profile matches the current setup");
+            if (HasUnappliedChanges())
+                parts.Add("Not applied yet");
+        }
+        ProfileStateText.Text = string.Join(" • ", parts);
+    }
+
+    // ----- Apply / launch -----
+
+    private void Apply_Click(object sender, RoutedEventArgs e) => ApplyAndMaybeLaunch(launch: false);
+
+    private void ApplyLaunch_Click(object sender, RoutedEventArgs e) => ApplyAndMaybeLaunch(launch: true);
+
+    private void LaunchGame_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            ReadSettingsFromControls();
+            ValidateInputs(requireExtensionsRoot: false);
+            if (_launcherService.IsGameRunning())
+                throw new InvalidOperationException("X4 is already running.");
+            if (HasUnappliedChanges())
+            {
+                var confirm = new ThemedDialog(this,
+                    "Launch Game",
+                    "The toggles shown have changes that are not applied yet.\n\nLaunch X4 with its current mod setup anyway? Use Apply & Launch to apply them first.",
+                    "Launch anyway",
+                    "Cancel");
+                if (confirm.ShowDialog() != true)
+                    return;
+            }
+            _launcherService.Launch(_settings.X4Root!);
+            _settingsStore.Save(_settings);
+            Close();
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"X4 could not be launched: {ex.Message}";
+            WpfMessageBox.Show(this, ex.Message, "X4 Mod Launcher — Launch Game", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ApplyAndMaybeLaunch(bool launch)
+    {
+        try
+        {
+            var outcome = ApplyDesiredState();
+            var message = outcome is null
+                ? "Nothing to apply — X4 already matches the toggles shown."
+                : $"Applied {outcome.Value.Result.Changes.Count} extension change(s). Backup: {Path.GetFileName(outcome.Value.Result.BackupPath)}"
+                    + (outcome.Value.PrunedBackups > 0 ? $". Removed {outcome.Value.PrunedBackups} old backup(s)." : ".");
+            if (outcome is not null)
+                RefreshCatalog();
+            StatusText.Text = message;
+
+            if (launch)
+            {
+                // Launch is deliberately after Apply has returned and the post-write verification has succeeded.
+                _launcherService.Launch(_settings.X4Root!);
+                Close();
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"No launch performed. Apply failed closed: {ex.Message}";
+            WpfMessageBox.Show(this, ex.Message, "X4 Mod Launcher", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>Writes the toggles to the X4 profile. Returns null when X4 already matches and nothing was written.</summary>
+    private (ApplyResult Result, int PrunedBackups)? ApplyDesiredState()
+    {
+        ReadSettingsFromControls();
+        ValidateInputs();
+        if (_launcherService.IsGameRunning())
+            throw new InvalidOperationException("X4 is already running. Close it before applying profile changes.");
+
+        var changes = ModProfileLogic.ChangesToApply(Catalog, CurrentToggles());
+        if (changes.Count == 0)
+            return null;
+        var result = _profileService.Apply(_settings.ProfilePath!, _settings.BackupDirectory!, Catalog, changes, requireGameClosed: true, isGameRunning: _launcherService.IsGameRunning, backupLabel: GetBackupLabel());
+        var pruned = BackupRetention.Prune(_settings.BackupDirectory!, _settings.BackupRetention, result.BackupPath);
+        _settingsStore.Save(_settings);
+        return (result, pruned.Count);
+    }
+
+    private string GetBackupLabel()
+    {
+        var profile = SelectedProfile;
+        if (profile is not null)
+            return ModProfileLogic.Matches(profile, Catalog, CurrentToggles()) ? profile.Name : $"{profile.Name}-modified";
+        return Path.GetFileName(Path.GetDirectoryName(_settings.ProfilePath ?? string.Empty)) ?? "X4Profile";
+    }
+
+    // ----- Backups and cleanup -----
+
+    private void Restore_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            ReadSettingsFromControls();
+            ValidateInputs(requireExtensionsRoot: false);
+            if (_launcherService.IsGameRunning())
+                throw new InvalidOperationException("X4 is already running. Close it before restoring a profile.");
+            var dialog = new BackupSelectionWindow(this, _settings.BackupDirectory!);
+            if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.SelectedPath))
+                return;
+            var backup = dialog.SelectedPath;
+            var answer = WpfMessageBox.Show(this, $"Restore this backup?\n\n{Path.GetFileName(backup)}\n\nX4 must be closed. The current profile will be replaced and can only be recovered from another backup.", "X4 Mod Launcher — Select Backup", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes)
+                return;
+            _profileService.Restore(_settings.ProfilePath!, backup, requireGameClosed: true, _launcherService.IsGameRunning);
+            RefreshCatalog();
+            StatusText.Text = $"Restored {Path.GetFileName(backup)}. X4 was not launched.";
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Restore failed: {ex.Message}";
+            WpfMessageBox.Show(this, ex.Message, "X4 Mod Launcher", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -332,13 +566,17 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             ReadSettingsFromControls();
             ValidateInputs(requireExtensionsRoot: false);
             var result = _profileService.RemoveDeprecated(_settings.ProfilePath!, _settings.BackupDirectory!, selectedIds, requireGameClosed: true, isGameRunning: _launcherService.IsGameRunning, backupLabel: GetBackupLabel());
-            EnsureProfileStorage();
+            var pruned = BackupRetention.Prune(_settings.BackupDirectory!, _settings.BackupRetention, result.BackupPath);
             var removed = result.RemovedIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var profile in _settings.ModProfiles.Values)
-                profile.RemoveAll(id => removed.Contains(id));
+            foreach (var profile in ModProfileLogic.InScope(_settings.Profiles, FolderKey))
+            {
+                profile.Enabled.RemoveAll(id => removed.Contains(id));
+                profile.Disabled?.RemoveAll(id => removed.Contains(id));
+            }
             _settingsStore.Save(_settings);
-            StatusText.Text = $"Removed {result.RemovedIds.Count} Deprecated / Old Extension entries. Backup: {Path.GetFileName(result.BackupPath)}";
             RefreshCatalog();
+            StatusText.Text = $"Removed {result.RemovedIds.Count} Deprecated / Old Extension entries. Backup: {Path.GetFileName(result.BackupPath)}"
+                + (pruned.Count > 0 ? $". Removed {pruned.Count} old backup(s)." : ".");
         }
         catch (Exception ex)
         {
@@ -347,54 +585,21 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void ExtensionRow_Click(object sender, MouseButtonEventArgs e)
-    {
-        if (e.OriginalSource is DependencyObject source
-            && (FindParent<WpfCheckBox>(source) is not null || FindParent<WpfButton>(source) is not null))
-            return;
-        if (sender is FrameworkElement { DataContext: ExtensionRow row } && row.UseEnabled)
-        {
-            row.DesiredEnabled = !row.DesiredEnabled;
-            UpdateDependencyWarnings();
-        }
-    }
-
-    private static T? FindParent<T>(DependencyObject? child) where T : DependencyObject
-    {
-        while (child is not null)
-        {
-            if (child is T match)
-                return match;
-            child = child is FrameworkContentElement content
-                ? content.Parent
-                : child is System.Windows.Media.Visual || child is System.Windows.Media.Media3D.Visual3D
-                    ? System.Windows.Media.VisualTreeHelper.GetParent(child)
-                    : null;
-        }
-        return null;
-    }
-
-    private bool IsInteractiveSource(DependencyObject source)
-    {
-        var control = FindParent<WpfControl>(source);
-        return control is not null && !ReferenceEquals(control, this);
-    }
+    // ----- Paths and settings -----
 
     private void AutoFind_Click(object sender, RoutedEventArgs e)
     {
         try
         {
             // Auto-Find is an explicit rediscovery request, but it must not replace the
-            // user's saved profiles or custom backup directory.
+            // user's saved profiles, backup directory, or retention setting.
             ReadSettingsFromControls();
-            var preservedProfiles = _settings.ModProfiles;
-            var preservedSelectedProfile = _settings.SelectedProfileName;
-            var preservedBackupDirectory = _settings.BackupDirectory;
             _settings = SettingsStore.WithDiscoveredDefaults(new X4LauncherSettings
             {
-                ModProfiles = preservedProfiles,
-                SelectedProfileName = preservedSelectedProfile,
-                BackupDirectory = preservedBackupDirectory
+                Profiles = _settings.Profiles,
+                SelectedProfileName = _settings.SelectedProfileName,
+                BackupDirectory = _settings.BackupDirectory,
+                BackupRetention = _settings.BackupRetention
             });
             ApplySettingsToControls();
             _settingsStore.Save(_settings);
@@ -434,97 +639,6 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
-    private void Apply_Click(object sender, RoutedEventArgs e) => ApplyAndMaybeLaunch(launch: false);
-
-    private void ApplyLaunch_Click(object sender, RoutedEventArgs e) => ApplyAndMaybeLaunch(launch: true);
-
-    private void LaunchGame_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            ReadSettingsFromControls();
-            ValidateInputs(requireExtensionsRoot: false);
-            if (_launcherService.IsGameRunning())
-                throw new InvalidOperationException("X4 is already running.");
-            _launcherService.Launch(_settings.X4Root!);
-            _settingsStore.Save(_settings);
-            Close();
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = $"X4 could not be launched: {ex.Message}";
-            WpfMessageBox.Show(this, ex.Message, "X4 Mod Launcher — Launch Game", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    private void ApplyAndMaybeLaunch(bool launch)
-    {
-        try
-        {
-            var result = ApplyDesiredState();
-            StatusText.Text = $"Applied {result.Changes.Count} extension states. Backup: {Path.GetFileName(result.BackupPath)}";
-            RefreshCatalog();
-
-            if (launch)
-            {
-                // Launch is deliberately after Apply has returned and the post-write verification has succeeded.
-                _launcherService.Launch(_settings.X4Root!);
-                StatusText.Text += " X4 launched. In-game loaded-extension verification is still required.";
-                Close();
-            }
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = $"No launch performed. Apply failed closed: {ex.Message}";
-            WpfMessageBox.Show(this, ex.Message, "X4 Mod Launcher", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    private ApplyResult ApplyDesiredState()
-    {
-        ReadSettingsFromControls();
-        ValidateInputs();
-        if (_launcherService.IsGameRunning())
-            throw new InvalidOperationException("X4 is already running. Close it before applying profile changes.");
-
-        var desired = Rows
-            .Where(x => x.CanEdit && !x.IsDlc)
-            .Where(x => !x.Entry.CurrentIsPresent
-                ? x.DesiredEnabled
-                : x.DesiredEnabled != x.Entry.CurrentEnabled
-                    || (LegacyExtensionCatalog.IsNativeHotkeyApi(x.Id) && x.Entry.CurrentSync != x.DesiredEnabled))
-            .ToDictionary(x => x.Id, x => x.DesiredEnabled, StringComparer.OrdinalIgnoreCase);
-        var result = _profileService.Apply(_settings.ProfilePath!, _settings.BackupDirectory!, Rows.Select(x => x.Entry).ToList(), desired, requireGameClosed: true, isGameRunning: _launcherService.IsGameRunning, backupLabel: GetBackupLabel());
-        _settingsStore.Save(_settings);
-        return result;
-    }
-
-    private void Restore_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            ReadSettingsFromControls();
-            ValidateInputs(requireExtensionsRoot: false);
-            if (_launcherService.IsGameRunning())
-                throw new InvalidOperationException("X4 is already running. Close it before restoring a profile.");
-            var dialog = new BackupSelectionWindow(this, _settings.BackupDirectory!);
-            if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.SelectedPath))
-                return;
-            var backup = dialog.SelectedPath;
-            var answer = WpfMessageBox.Show(this, $"Restore this backup?\n\n{Path.GetFileName(backup)}\n\nX4 must be closed. The current profile will be replaced and can only be recovered from another backup.", "X4 Mod Launcher — Select Backup", MessageBoxButton.YesNo, MessageBoxImage.Warning);
-            if (answer != MessageBoxResult.Yes)
-                return;
-            _profileService.Restore(_settings.ProfilePath!, backup, requireGameClosed: true, _launcherService.IsGameRunning);
-            StatusText.Text = $"Restored {Path.GetFileName(backup)}. X4 was not launched.";
-            RefreshCatalog();
-        }
-        catch (Exception ex)
-        {
-            StatusText.Text = $"Restore failed: {ex.Message}";
-            WpfMessageBox.Show(this, ex.Message, "X4 Mod Launcher", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
     private void RefreshCatalog(bool loadSavedSettings = false)
     {
         try
@@ -536,10 +650,9 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 ReadSettingsFromControls();
                 _settings = SettingsStore.WithDiscoveredDefaults(_settings);
             }
-            EnsureProfileStorage();
             ApplySettingsToControls();
             ReadSettingsFromControls();
-            RefreshProfileList(defaultToNative: loadSavedSettings);
+            RefreshProfileList();
             if (string.IsNullOrWhiteSpace(_settings.ProfilePath) || !File.Exists(_settings.ProfilePath))
                 throw new FileNotFoundException("Choose an X4 profile content.xml. The launcher never creates or edits saves.");
 
@@ -548,17 +661,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             Rows.Clear();
             foreach (var entry in entries)
                 Rows.Add(new ExtensionRow(entry));
+            SelectProfileForCurrentState();
             UpdateDependencyWarnings();
+            UpdateProfileState();
             var installed = Rows.Count(x => !x.IsDlc && x.IsAvailable);
             var enabled = Rows.Count(x => !x.IsDlc && x.IsAvailable && x.Entry.CurrentEnabled);
             var deprecated = Rows.Count(x => x.IsDeprecated);
-            StatusText.Text = $"Loaded {enabled} enabled of {installed} installed non-DLC extensions; {deprecated} Deprecated / Old Extension entries.\nCurrent state is read from {_settings.ProfilePath}.";
-            SetNativeProfileLock(ProfileSelector.SelectedItem is string selectedProfile
-                && selectedProfile.Equals(NativeProfileOption, StringComparison.Ordinal));
+            var broken = Rows.Count(x => x.HasMetadataError);
+            StatusText.Text = $"Loaded {enabled} enabled of {installed} installed non-DLC extensions; {deprecated} Deprecated / Old Extension entries"
+                + (broken > 0 ? $"; {broken} with unreadable metadata (left unchanged)." : ".")
+                + $"\nCurrent state is read from {_settings.ProfilePath}.";
         }
         catch (Exception ex)
         {
             Rows.Clear();
+            SelectProfileWithoutDialog(null);
+            ProfileStateText.Text = string.Empty;
             StatusText.Text = $"Catalog not ready: {ex.Message}";
         }
     }
@@ -578,13 +696,22 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 row.StatusLabel = "Deprecated / Old Extension";
                 continue;
             }
+            if (row.HasMetadataError)
+            {
+                row.StatusLabel = $"Warning: metadata error, left unchanged ({row.Entry.MetadataError})";
+                continue;
+            }
             var missing = row.Entry.Dependencies
                 .Where(dep => !dep.Optional
                     && !ExtensionCatalog.IsDlcIdentifier(dep.Id)
                     && (!byId.TryGetValue(dep.Id, out var dependency) || !dependency.IsAvailable || !dependency.DesiredEnabled))
                 .Select(dep => dep.Id)
                 .ToList();
-            row.StatusLabel = missing.Count == 0 ? "Ready" : $"Warning: dependency disabled or missing ({string.Join(", ", missing)})";
+            row.StatusLabel = missing.Count > 0
+                ? $"Warning: dependency disabled or missing ({string.Join(", ", missing)})"
+                : row.IsUnlisted
+                    ? "Not in this profile — left as is"
+                    : "Ready";
         }
     }
 
@@ -605,6 +732,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         X4RootBox.Text = _settings.X4Root ?? string.Empty;
         ProfilePathBox.Text = _settings.ProfilePath ?? string.Empty;
         BackupDirectoryBox.Text = _settings.BackupDirectory ?? string.Empty;
+        BackupRetentionBox.Text = _settings.BackupRetention.ToString();
     }
 
     private void ReadSettingsFromControls()
@@ -613,20 +741,8 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         _settings.ProfilePath = ProfilePathBox.Text.Trim();
         _settings.ExtensionsRoot = string.IsNullOrWhiteSpace(_settings.X4Root) ? null : Path.Combine(_settings.X4Root, "extensions");
         _settings.BackupDirectory = BackupDirectoryBox.Text.Trim();
-    }
-
-    private string GetBackupLabel()
-    {
-        if (ProfileSelector.SelectedItem is string selected
-            && !selected.Equals(CreateProfileOption, StringComparison.Ordinal)
-            && !string.IsNullOrWhiteSpace(selected))
-            return selected;
-        return Path.GetFileName(Path.GetDirectoryName(_settings.ProfilePath ?? string.Empty)) ?? "X4Profile";
-    }
-
-    private void EnsureProfileStorage()
-    {
-        _settings.ModProfiles ??= new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        if (int.TryParse(BackupRetentionBox.Text.Trim(), out var keep) && keep >= 0)
+            _settings.BackupRetention = keep;
     }
 
     private void SetNativeProfileLock(bool locked)
@@ -635,33 +751,25 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             row.SetNativeProfileLocked(locked);
     }
 
-    private void RefreshProfileList(bool defaultToNative = false)
+    private static T? FindParent<T>(DependencyObject? child) where T : DependencyObject
     {
-        EnsureProfileStorage();
-        // Re-read persisted profiles as a defensive migration path for launchers that
-        // were opened with an older settings schema or a stale in-memory settings object.
-        // This does not overwrite the current selection; it only restores named entries.
-        var persisted = _settingsStore.Load();
-        foreach (var profile in persisted.ModProfiles)
-            _settings.ModProfiles[profile.Key] = profile.Value;
-        _suppressProfileSelection = true;
-        ProfileNames.Clear();
-        ProfileNames.Add(NativeProfileOption);
-        foreach (var name in _settings.ModProfiles.Keys
-                     .Where(name => !name.Equals(CreateProfileOption, StringComparison.OrdinalIgnoreCase)
-                         && !name.Equals(NativeProfileOption, StringComparison.OrdinalIgnoreCase))
-                     .OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
-            ProfileNames.Add(name);
-        ProfileNames.Add(CreateProfileOption);
-        var selected = defaultToNative
-            ? NativeProfileOption
-            : _settings.SelectedProfileName is not null && ProfileNames.Contains(_settings.SelectedProfileName)
-                ? _settings.SelectedProfileName
-                : CreateProfileOption;
-        ProfileSelector.SelectedItem = selected;
-        if (!selected.Equals(CreateProfileOption, StringComparison.Ordinal))
-            _lastProfileSelection = selected;
-        _suppressProfileSelection = false;
+        while (child is not null)
+        {
+            if (child is T match)
+                return match;
+            child = child is FrameworkContentElement content
+                ? content.Parent
+                : child is System.Windows.Media.Visual || child is System.Windows.Media.Media3D.Visual3D
+                    ? System.Windows.Media.VisualTreeHelper.GetParent(child)
+                    : null;
+        }
+        return null;
+    }
+
+    private bool IsInteractiveSource(DependencyObject source)
+    {
+        var control = FindParent<WpfControl>(source);
+        return control is not null && !ReferenceEquals(control, this);
     }
 
     private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
@@ -672,6 +780,7 @@ public sealed class ExtensionRow : INotifyPropertyChanged
     private bool _desiredEnabled;
     private string _statusLabel = string.Empty;
     private bool _nativeProfileLocked;
+    private bool _isUnlisted;
 
     public ExtensionRow(ExtensionEntry entry)
     {
@@ -687,8 +796,17 @@ public sealed class ExtensionRow : INotifyPropertyChanged
     public bool IsDlc => Entry.IsDlc;
     public bool IsAvailable => Entry.IsAvailable;
     public bool IsDeprecated => !Entry.IsDlc && !Entry.IsAvailable;
-    public bool CanEdit => Entry.IsAvailable && !Entry.IsDlc;
+    public bool HasMetadataError => Entry.MetadataError is not null;
+    public bool CanEdit => Entry.CanToggle;
     public bool UseEnabled => CanEdit && !_nativeProfileLocked;
+
+    /// <summary>True when the selected profile does not mention this extension, so its state was left as is.</summary>
+    public bool IsUnlisted
+    {
+        get => _isUnlisted;
+        set { if (_isUnlisted == value) return; _isUnlisted = value; OnPropertyChanged(); }
+    }
+
     public bool DesiredEnabled
     {
         get => _desiredEnabled;
@@ -712,13 +830,15 @@ public sealed class ExtensionRow : INotifyPropertyChanged
         OnPropertyChanged(nameof(UseEnabled));
     }
     public string CurrentLabel => IsDlc ? "N/A" : IsDeprecated ? (Entry.CurrentEnabled ? "Enabled (missing)" : "Disabled (missing)") : !Entry.CurrentIsPresent ? "Not in profile" : Entry.CurrentEnabled ? "Enabled" : "Disabled";
-    public string DesiredLabel => IsDlc ? "N/A" : IsDeprecated ? "Cleanup only" : DesiredEnabled ? "Enabled" : "Disabled";
+    public string DesiredLabel => IsDlc ? "N/A" : IsDeprecated ? "Cleanup only" : HasMetadataError ? "Unchanged" : DesiredEnabled ? "Enabled" : "Disabled";
     public string StatusLabel
     {
         get => _statusLabel;
         set { if (_statusLabel == value) return; _statusLabel = value; OnPropertyChanged(); OnPropertyChanged(nameof(StatusBrush)); }
     }
-    public System.Windows.Media.Brush StatusBrush => StatusLabel.StartsWith("Warning", StringComparison.OrdinalIgnoreCase) || StatusLabel.StartsWith("Deprecated", StringComparison.OrdinalIgnoreCase)
+    public System.Windows.Media.Brush StatusBrush => StatusLabel.StartsWith("Warning", StringComparison.OrdinalIgnoreCase)
+        || StatusLabel.StartsWith("Deprecated", StringComparison.OrdinalIgnoreCase)
+        || StatusLabel.StartsWith("Not in this profile", StringComparison.OrdinalIgnoreCase)
         ? System.Windows.Media.Brushes.Gold
         : IsDlc ? System.Windows.Media.Brushes.LightGray : System.Windows.Media.Brushes.LightGreen;
 
