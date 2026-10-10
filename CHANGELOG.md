@@ -2,7 +2,7 @@
 
 All notable changes to X4 Mod Launcher are documented here. Versions follow [Semantic Versioning](https://semver.org/).
 
-## [1.1.0] - Unreleased
+## [1.1.0] - 2026-10-10
 
 ### Changed
 - **Removed redundant buttons.** Load and Load & Launch are gone. Choosing a profile in the drop-down now previews it in the toggle list without writing anything; Apply / Apply & Launch write what is shown. Previously Apply ignored the selected profile and only wrote the toggles, so selecting a profile (including Native) and pressing Apply could write a different setup than the one named, with a misleading backup label.
