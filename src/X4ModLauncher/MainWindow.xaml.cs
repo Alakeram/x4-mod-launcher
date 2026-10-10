@@ -22,6 +22,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
 {
     private const string CreateProfileOption = "Create Profile";
     private const string NativeProfileOption = ModProfileLogic.NativeProfileName;
+    internal const string DisabledStatus = "Disabled";
     private readonly X4ProfileService _profileService = new();
     private readonly X4LauncherService _launcherService = new();
     private readonly SettingsStore _settingsStore = new();
@@ -154,6 +155,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
                 row.DesiredEnabled = desired;
             row.IsUnlisted = unlisted.Contains(row.Id);
         }
+        SortRows();
         var isNative = ReferenceEquals(profile, ModProfileLogic.Native);
         SetNativeProfileLock(isNative);
         _lastProfileSelection = profile.Name;
@@ -662,6 +664,7 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             foreach (var entry in entries)
                 Rows.Add(new ExtensionRow(entry));
             SelectProfileForCurrentState();
+            SortRows();
             UpdateDependencyWarnings();
             UpdateProfileState();
             var installed = Rows.Count(x => !x.IsDlc && x.IsAvailable);
@@ -681,6 +684,26 @@ public partial class MainWindow : Window, INotifyPropertyChanged
         }
     }
 
+    /// <summary>
+    /// Orders the list: enabled mods, disabled mods, deprecated entries, then DLC; by name within each group.
+    /// Called on load and profile preview only, not on each toggle, so rows do not jump while clicking.
+    /// </summary>
+    private void SortRows()
+    {
+        var ordered = Rows
+            .OrderBy(row => row.IsDlc ? 3 : row.IsDeprecated ? 2 : row.DesiredEnabled ? 0 : 1)
+            .ThenBy(row => row.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        for (var index = 0; index < ordered.Count; index++)
+        {
+            var current = Rows.IndexOf(ordered[index]);
+            if (current != index)
+                Rows.Move(current, index);
+        }
+        if (Rows.Count > 0)
+            ExtensionList.ScrollIntoView(Rows[0]);
+    }
+
     private void UpdateDependencyWarnings()
     {
         var byId = Rows.ToDictionary(x => x.Id, StringComparer.OrdinalIgnoreCase);
@@ -694,6 +717,12 @@ public partial class MainWindow : Window, INotifyPropertyChanged
             if (row.IsDeprecated)
             {
                 row.StatusLabel = "Deprecated / Old Extension";
+                continue;
+            }
+            // Warnings only matter for mods that will be on; a mod that is off cannot break anything.
+            if (!row.DesiredEnabled)
+            {
+                row.StatusLabel = DisabledStatus;
                 continue;
             }
             if (row.HasMetadataError)
@@ -840,7 +869,7 @@ public sealed class ExtensionRow : INotifyPropertyChanged
         || StatusLabel.StartsWith("Deprecated", StringComparison.OrdinalIgnoreCase)
         || StatusLabel.StartsWith("Not in this profile", StringComparison.OrdinalIgnoreCase)
         ? System.Windows.Media.Brushes.Gold
-        : IsDlc ? System.Windows.Media.Brushes.LightGray : System.Windows.Media.Brushes.LightGreen;
+        : IsDlc || StatusLabel == MainWindow.DisabledStatus ? System.Windows.Media.Brushes.LightGray : System.Windows.Media.Brushes.LightGreen;
 
     public event PropertyChangedEventHandler? PropertyChanged;
     private void OnPropertyChanged([CallerMemberName] string? name = null) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

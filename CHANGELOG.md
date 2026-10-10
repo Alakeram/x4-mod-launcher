@@ -14,6 +14,8 @@ All notable changes to X4 Mod Launcher are documented here. Versions follow [Sem
 - Launch Game asks for confirmation when the toggles shown have not been applied.
 - Apply skips writing (and creating a backup) when X4 already matches the toggles.
 - Creating a profile with an existing name asks before overwriting it.
+- The extension list shows enabled mods first, then disabled mods, then deprecated entries and DLC. It re-sorts on load, after Apply, and when a profile is chosen, not on every toggle.
+- Disabled mods no longer show warnings (missing dependencies, metadata errors, not in profile); their status reads "Disabled". Warnings only appear for mods that are on.
 
 ### Added
 - Backup retention: only the newest 20 launcher backups are kept by default ("Keep newest backups", 0 keeps all). Only files named by the launcher are deleted, and never the backup just made.
