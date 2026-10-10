@@ -30,13 +30,12 @@ The launcher edits only the configured profile `content.xml`; it never edits sav
 
 Settings and Mod Profiles are stored in `%LocalAppData%\X4ModLauncher\settings.json`. The launcher is local-only: no telemetry, downloads, or auto-update.
 
-## Build and test
+## Build
 
 Prerequisites: Windows and the .NET 8 SDK (includes the Windows Desktop SDK).
 
 ```powershell
 dotnet build .\src\X4ModLauncher\X4ModLauncher.csproj --configuration Release
-dotnet run --project .\tests\X4ModLauncher.Core.Tests\X4ModLauncher.Core.Tests.csproj --configuration Release
 ```
 
 Publish the single-file release executable:
@@ -59,6 +58,5 @@ Bump `VersionPrefix` in `Directory.Build.props` and add a `CHANGELOG.md` entry f
 
 - `src/X4ModLauncher.Core` — profile XML read/apply/restore, extension discovery, settings, game launch (no UI).
 - `src/X4ModLauncher` — WPF application.
-- `tests/X4ModLauncher.Core.Tests` — console test runner using temporary fixture workspaces.
 
 Made by: Alakeram

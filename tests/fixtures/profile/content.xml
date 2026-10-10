@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<content fixture="true">
-  <metadata fixture="keep" />
-  <extension id="ws_3750545906" enabled="true" sync="true" />
-  <extension id="fixture_extension" enabled="false" />
-</content>

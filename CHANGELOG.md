@@ -4,7 +4,7 @@ All notable changes to X4 Mod Launcher are documented here. Versions follow [Sem
 
 ## [Unreleased]
 
-- Repository cleanup: removed all compiled binaries (the self-contained `X4ModLauncher/` runtime DLLs and executables) and the duplicate `X4ModLauncher-Source/` upload. The repository now contains only source code, tests, the README, and this changelog, with a fresh history. Release executables are published on the [GitHub Releases](https://github.com/Alakeram/x4-mod-launcher/releases) page; the v1.0.0 release and tag are unchanged.
+- Repository cleanup: removed all compiled binaries (the self-contained `X4ModLauncher/` runtime DLLs and executables) and the duplicate `X4ModLauncher-Source/` upload. The repository now contains only the application source code, the README, and this changelog, with a fresh history. The test project and `.gitignore` are kept local-only. Release executables are published on the [GitHub Releases](https://github.com/Alakeram/x4-mod-launcher/releases) page; the v1.0.0 release and tag are unchanged.
 - `VersionPrefix` set to `1.0.0` to match the published release (the v1.0.0 executable reports `0.1.0`).
 
 ## [1.0.0] - 2026-09-21
