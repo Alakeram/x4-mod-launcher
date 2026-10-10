@@ -1,0 +1,58 @@
+<Window x:Class="X4ModLauncher.BackupSelectionWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Select an X4 profile backup" Width="760" Height="520"
+        WindowStartupLocation="CenterOwner" WindowStyle="None" ResizeMode="NoResize"
+        AllowsTransparency="True" Background="Transparent" Foreground="{StaticResource TextBrush}">
+  <Border Background="{StaticResource PanelBrush2}" BorderBrush="{StaticResource AccentBrush}" BorderThickness="1" Padding="1">
+    <Grid PreviewMouseLeftButtonDown="WindowDrag">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
+
+      <Border Grid.Row="0" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1" Padding="14,10">
+        <Grid>
+          <TextBlock Text="Select an X4 Profile Backup" FontSize="16" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" VerticalAlignment="Center" />
+          <Button Grid.Column="1" Content="×" Width="30" Height="26" Padding="0" Margin="0" HorizontalAlignment="Right" Click="Cancel_Click" ToolTip="Close" />
+        </Grid>
+      </Border>
+
+      <TextBlock Grid.Row="1" Text="Choose a timestamped backup to restore. X4 must be closed before restoring a profile." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="18,14,18,12" />
+
+      <ListBox Grid.Row="2" x:Name="BackupList" ItemsSource="{Binding Backups}" Margin="18,0" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="4" MouseDoubleClick="BackupList_MouseDoubleClick">
+        <ListBox.ItemContainerStyle>
+          <Style TargetType="ListBoxItem">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Style.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter Property="Background" Value="{StaticResource ButtonHoverBrush}" /></Trigger>
+              <Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="{StaticResource SelectedBrush}" /></Trigger>
+            </Style.Triggers>
+          </Style>
+        </ListBox.ItemContainerStyle>
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <Grid>
+              <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="180" />
+              </Grid.ColumnDefinitions>
+              <TextBlock Text="{Binding FileName}" FontWeight="SemiBold" />
+              <TextBlock Grid.Column="1" Text="{Binding ModifiedLabel}" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Right" />
+            </Grid>
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+      </ListBox>
+
+      <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Margin="18,14,18,16">
+        <Button Content="Open" Width="110" Click="Open_Click" HorizontalContentAlignment="Center" />
+        <Button Content="Cancel" Width="110" Click="Cancel_Click" HorizontalContentAlignment="Center" />
+      </StackPanel>
+    </Grid>
+  </Border>
+</Window>

@@ -1,0 +1,22 @@
+# Allow-list: only project source and docs are tracked.
+# Everything at the root is ignored unless explicitly re-included below.
+/*
+!/.gitignore
+!/README.md
+!/CHANGELOG.md
+!/Directory.Build.props
+!/src/
+!/tests/
+
+# Build output and IDE state
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# AI assistant files must never be committed
+.claude/
+.codex/
+CLAUDE.md
+AGENTS.md
